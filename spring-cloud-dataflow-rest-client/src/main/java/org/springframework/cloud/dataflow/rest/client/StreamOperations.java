@@ -19,6 +19,7 @@ package org.springframework.cloud.dataflow.rest.client;
 import java.util.Map;
 
 import org.springframework.cloud.dataflow.rest.resource.StreamDefinitionResource;
+import org.springframework.cloud.skipper.domain.PackageIdentifier;
 import org.springframework.hateoas.PagedResources;
 
 /**
@@ -33,7 +34,7 @@ public interface StreamOperations {
 	/**
 	 * @return the list streams known to the system.
 	 */
-	public PagedResources<StreamDefinitionResource> list();
+	PagedResources<StreamDefinitionResource> list();
 
 	/**
 	 * Create a new stream, optionally deploying it.
@@ -43,7 +44,7 @@ public interface StreamOperations {
 	 * @param deploy whether to deploy the stream after creating its definition
 	 * @return the new stream definition
 	 */
-	public StreamDefinitionResource createStream(String name, String definition, boolean deploy);
+	StreamDefinitionResource createStream(String name, String definition, boolean deploy);
 
 	/**
 	 * Deploy an already created stream.
@@ -51,30 +52,56 @@ public interface StreamOperations {
 	 * @param name the name of the stream
 	 * @param properties the deployment properties
 	 */
-	public void deploy(String name, Map<String, String> properties);
+	void deploy(String name, Map<String, String> properties);
 
 	/**
 	 * Undeploy a deployed stream, retaining its definition.
 	 *
 	 * @param name the name of the stream
 	 */
-	public void undeploy(String name);
+	void undeploy(String name);
 
 	/**
 	 * Undeploy all currently deployed streams.
 	 */
-	public void undeployAll();
+	void undeployAll();
 
 	/**
 	 * Destroy an existing stream.
 	 *
 	 * @param name the name of the stream
 	 */
-	public void destroy(String name);
+	void destroy(String name);
 
 	/**
 	 * Destroy all streams known to the system.
 	 */
-	public void destroyAll();
+	void destroyAll();
 
+	/**
+	 * Update the stream given its corresponding releaseName in Skipper using the specified
+	 * package and updated yaml config.
+	 * @param streamName the name of the stream to update
+	 * @param releaseName the corresponding release name of the stream in skipper
+	 * @param packageIdentifier the package that corresponds to this stream
+	 * @param updateProperties a map of properties to use for updating the stream
+	 */
+	void updateStream(String streamName, String releaseName, PackageIdentifier packageIdentifier,
+			Map<String, String> updateProperties);
+
+	/**
+	 * Rollback the stream to the previous or a specific release version.
+	 *
+	 * @param streamName the name of the stream to rollback
+	 * @param version the version to rollback to. If the version is 0, then rollback to the previous release.
+	 * The version can not be less than zero.
+	 */
+	void rollbackStream(String streamName, int version);
+
+	/**
+	 * Queries the server for the stream definition.
+	 * @param streamName the name of the stream to get status
+	 * @return The current stream definition with updated status
+	 */
+	StreamDefinitionResource getStreamDefinition(String streamName);
 }

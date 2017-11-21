@@ -231,7 +231,7 @@ public class StreamCompletionProviderTests {
 					String filename = name + "-" + type;
 					File file = new File(ROOT, filename);
 					if (file.exists()) {
-						return new AppRegistration(name, type, file.toURI(), resourceLoader);
+						return new AppRegistration(name, type, file.toURI(), file.toURI(), resourceLoader);
 					}
 					else {
 						return null;
@@ -250,7 +250,7 @@ public class StreamCompletionProviderTests {
 				private AppRegistration makeAppRegistration(File file) {
 					String fileName = file.getName();
 					Matcher matcher = Pattern.compile("(?<name>.+)-(?<type>.+)").matcher(fileName);
-					Assert.isTrue(matcher.matches());
+					Assert.isTrue(matcher.matches(), fileName + " does not match expected pattern.");
 					String name = matcher.group("name");
 					ApplicationType type = ApplicationType.valueOf(matcher.group("type"));
 					return new AppRegistration(name, type, file.toURI(), resourceLoader);

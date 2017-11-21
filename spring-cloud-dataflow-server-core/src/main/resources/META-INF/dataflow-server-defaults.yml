@@ -12,6 +12,8 @@ logging:
     org.springframework.boot: 'WARN'
     # The following INFO is to log the generated password when using basic security
     org.springframework.boot.autoconfigure.security: 'INFO'
+    # The following INFO is to log the embedded tomcat port
+    org.springframework.boot.context.embedded.tomcat: 'INFO'
 spring:
   autoconfigure:
     exclude: org.springframework.boot.autoconfigure.session.SessionAutoConfiguration
@@ -23,7 +25,7 @@ spring:
       security:
         authorization:
           enabled: true
-          permit-all-paths: "/authenticate,/security/info,/features,/assets/**"
+          permit-all-paths: "/authenticate,/security/info,/features,/assets/**,/dashboard/logout-success-oauth.html"
           rules:
             # Metrics
 
@@ -83,7 +85,7 @@ spring:
 
             - DELETE /streams/deployments/*          => hasRole('ROLE_CREATE')
             - DELETE /streams/deployments            => hasRole('ROLE_CREATE')
-            - POST   /streams/deployments/*          => hasRole('ROLE_CREATE')
+            - POST   /streams/deployments/**         => hasRole('ROLE_CREATE')
 
             # Task Definitions
 

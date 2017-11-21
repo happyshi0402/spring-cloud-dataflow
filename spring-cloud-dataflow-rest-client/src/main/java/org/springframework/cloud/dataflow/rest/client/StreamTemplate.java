@@ -18,7 +18,9 @@ package org.springframework.cloud.dataflow.rest.client;
 
 import java.util.Map;
 
+import org.springframework.cloud.dataflow.rest.UpdateStreamRequest;
 import org.springframework.cloud.dataflow.rest.resource.StreamDefinitionResource;
+import org.springframework.cloud.skipper.domain.PackageIdentifier;
 import org.springframework.hateoas.Link;
 import org.springframework.hateoas.ResourceSupport;
 import org.springframework.util.Assert;
@@ -107,5 +109,32 @@ public class StreamTemplate implements StreamOperations {
 	@Override
 	public void destroyAll() {
 		restTemplate.delete(definitionsLink.getHref());
+	}
+
+	@Override
+	public void updateStream(String streamName, String releaseName, PackageIdentifier packageIdentifier,
+			Map<String, String> updateProperties) {
+		Assert.hasText(streamName, "Stream name cannot be null or empty");
+		Assert.notNull(packageIdentifier, "PackageIdentifier cannot be null");
+		Assert.hasText(packageIdentifier.getPackageName(), "Package Name cannot be null or empty");
+		Assert.hasText(releaseName, "Release name cannot be null or empty");
+		Assert.notNull(updateProperties, "UpdateProperties cannot be null");
+		UpdateStreamRequest updateStreamRequest = new UpdateStreamRequest(releaseName, packageIdentifier,
+				updateProperties);
+		String url = deploymentsLink.getHref() + "/update/" + streamName;
+		restTemplate.postForObject(url, updateStreamRequest, Object.class);
+	}
+
+	@Override
+	public void rollbackStream(String streamName, int version) {
+		Assert.hasText(streamName, "Release name cannot be null or empty");
+		String url = deploymentsLink.getHref() + "/rollback/" + streamName + "/" + version;
+		restTemplate.postForObject(url, null, Object.class);
+	}
+
+	@Override
+	public StreamDefinitionResource getStreamDefinition(String streamName) {
+		String uriTemplate = this.definitionLink.expand(streamName).getHref();
+		return restTemplate.getForObject(uriTemplate, StreamDefinitionResource.class);
 	}
 }

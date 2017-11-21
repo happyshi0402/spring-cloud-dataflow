@@ -16,18 +16,13 @@
 
 package org.springframework.cloud.dataflow.server.controller;
 
-import java.util.AbstractMap;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,16 +40,13 @@ import org.springframework.cloud.dataflow.server.DataFlowServerUtil;
 import org.springframework.cloud.dataflow.server.controller.support.ArgumentSanitizer;
 import org.springframework.cloud.dataflow.server.controller.support.ControllerUtils;
 import org.springframework.cloud.dataflow.server.controller.support.InvalidStreamDefinitionException;
-import org.springframework.cloud.dataflow.server.repository.DeploymentIdRepository;
-import org.springframework.cloud.dataflow.server.repository.DeploymentKey;
 import org.springframework.cloud.dataflow.server.repository.DuplicateStreamDefinitionException;
 import org.springframework.cloud.dataflow.server.repository.NoSuchStreamDefinitionException;
 import org.springframework.cloud.dataflow.server.repository.StreamDefinitionRepository;
 import org.springframework.cloud.dataflow.server.repository.support.SearchPageable;
+import org.springframework.cloud.dataflow.server.service.StreamService;
 import org.springframework.cloud.dataflow.server.support.CannotDetermineApplicationTypeException;
-import org.springframework.cloud.deployer.spi.app.AppDeployer;
 import org.springframework.cloud.deployer.spi.app.DeploymentState;
-import org.springframework.cloud.deployer.spi.app.MultiStateAppDeployer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -92,19 +84,9 @@ public class StreamDefinitionController {
 	private static final Logger logger = LoggerFactory.getLogger(StreamDefinitionController.class);
 
 	/**
-	 * The repository this controller will use for stream CRUD operations.
+	 * The streamDefinitionRepository this controller will use for stream CRUD operations.
 	 */
-	private final StreamDefinitionRepository repository;
-
-	/**
-	 * The repository this controller will use for deployment IDs.
-	 */
-	private final DeploymentIdRepository deploymentIdRepository;
-
-	/**
-	 * The deployer this controller will use to compute stream deployment status.
-	 */
-	private final AppDeployer deployer;
+	private final StreamDefinitionRepository streamDefinitionRepository;
 
 	/**
 	 * The app registry this controller will use to lookup apps.
@@ -112,42 +94,31 @@ public class StreamDefinitionController {
 	private final AppRegistry appRegistry;
 
 	/**
-	 * This deployment controller is used as a delegate when stream creation is
-	 * immediately followed by deployment.
+	 * The service that is responsible for deploying streams.
 	 */
-	private final StreamDeploymentController deploymentController;
+	private final StreamService streamService;
 
 	/**
 	 * Create a {@code StreamDefinitionController} that delegates
 	 * <ul>
 	 * <li>CRUD operations to the provided {@link StreamDefinitionRepository}</li>
-	 * <li>deployment ID operations to the provided {@link DeploymentIdRepository}</li>
-	 * <li>deployment operations to the provided {@link StreamDeploymentController}</li>
-	 * <li>deployment status computation to the provided {@link AppDeployer}</li>
+	 * <li>deployment operations and status computation via {@link StreamService}</li>
 	 * </ul>
 	 *
-	 * @param repository the repository this controller will use for stream CRUD
-	 * operations
-	 * @param deploymentIdRepository the repository this controller will use for
-	 * deployment IDs
-	 * @param deploymentController the deployment controller to delegate deployment
-	 * operations
-	 * @param deployer the deployer this controller will use to compute deployment status
+	 * @param repository the streamDefinitionRepository this controller will use for stream
+	 * CRUD operations
 	 * @param appRegistry the app registry to look up registered apps
+	 * @param streamService the stream service to use to delegate stream operations such as
+	 * deploy/status.
 	 */
-	public StreamDefinitionController(StreamDefinitionRepository repository,
-			DeploymentIdRepository deploymentIdRepository, StreamDeploymentController deploymentController,
-			AppDeployer deployer, AppRegistry appRegistry) {
+	public StreamDefinitionController(StreamDefinitionRepository repository, AppRegistry appRegistry,
+			StreamService streamService) {
 		Assert.notNull(repository, "StreamDefinitionRepository must not be null");
-		Assert.notNull(deploymentIdRepository, "DeploymentIdRepository must not be null");
-		Assert.notNull(deploymentController, "StreamDeploymentController must not be null");
-		Assert.notNull(deployer, "AppDeployer must not be null");
 		Assert.notNull(appRegistry, "AppRegistry must not be null");
-		this.deploymentController = deploymentController;
-		this.deploymentIdRepository = deploymentIdRepository;
-		this.repository = repository;
-		this.deployer = deployer;
+		Assert.notNull(streamService, "StreamService must not be null");
+		this.streamDefinitionRepository = repository;
 		this.appRegistry = appRegistry;
+		this.streamService = streamService;
 	}
 
 	/**
@@ -156,11 +127,11 @@ public class StreamDefinitionController {
 	 * @param states set of states for apps of a stream
 	 * @return the stream state based on app states
 	 */
-	static DeploymentState aggregateState(Set<DeploymentState> states) {
+	public static DeploymentState aggregateState(Set<DeploymentState> states) {
 		if (states.size() == 1) {
 			DeploymentState state = states.iterator().next();
 			logger.debug("aggregateState: Deployment State Set Size = 1.  Deployment State " + state);
-			// a stream which is known to the stream definition repository
+			// a stream which is known to the stream definition streamDefinitionRepository
 			// but unknown to deployers is undeployed
 			if (state == DeploymentState.unknown) {
 				logger.debug("aggregateState: Returning " + DeploymentState.undeployed);
@@ -204,14 +175,14 @@ public class StreamDefinitionController {
 		if (search != null) {
 			final SearchPageable searchPageable = new SearchPageable(pageable, search);
 			searchPageable.addColumns("DEFINITION_NAME", "DEFINITION");
-			streamDefinitions = repository.search(searchPageable);
+			streamDefinitions = streamDefinitionRepository.search(searchPageable);
 			long count = streamDefinitions.getContent().size();
 			long to = Math.min(count, pageable.getOffset() + pageable.getPageSize());
 			streamDefinitions = new PageImpl<>(streamDefinitions.getContent(), pageable,
 					streamDefinitions.getTotalElements());
 		}
 		else {
-			streamDefinitions = repository.findAll(pageable);
+			streamDefinitions = streamDefinitionRepository.findAll(pageable);
 		}
 		return assembler.toResource(streamDefinitions, new Assembler(streamDefinitions));
 	}
@@ -224,24 +195,24 @@ public class StreamDefinitionController {
 	 * @param deploy if {@code true}, the stream is deployed upon creation (default is
 	 * {@code false})
 	 * @return the created stream definition
-	 * @throws DuplicateStreamDefinitionException if a stream definition with the same
-	 * name already exists
-	 * @throws InvalidStreamDefinitionException if there errors in parsing the strem DSL,
+	 * @throws DuplicateStreamDefinitionException if a stream definition with the same name
+	 * already exists
+	 * @throws InvalidStreamDefinitionException if there errors in parsing the stream DSL,
 	 * resolving the name, or type of applications in the stream
 	 */
 	@RequestMapping(value = "", method = RequestMethod.POST)
 	@ResponseStatus(HttpStatus.CREATED)
 	public StreamDefinitionResource save(@RequestParam("name") String name, @RequestParam("definition") String dsl,
 			@RequestParam(value = "deploy", defaultValue = "false") boolean deploy) {
-		StreamDefinition stream;
+		StreamDefinition streamDefinition;
 		try {
-			stream = new StreamDefinition(name, dsl);
+			streamDefinition = new StreamDefinition(name, dsl);
 		}
 		catch (ParseException ex) {
 			throw new InvalidStreamDefinitionException(ex.getMessage());
 		}
 		List<String> errorMessages = new ArrayList<>();
-		for (StreamAppDefinition streamAppDefinition : stream.getAppDefinitions()) {
+		for (StreamAppDefinition streamAppDefinition : streamDefinition.getAppDefinitions()) {
 			final String appName = streamAppDefinition.getRegisteredAppName();
 			final ApplicationType appType;
 			try {
@@ -262,11 +233,11 @@ public class StreamDefinitionController {
 			throw new InvalidStreamDefinitionException(
 					StringUtils.collectionToDelimitedString(errorMessages, "\n"));
 		}
-		this.repository.save(stream);
+		this.streamDefinitionRepository.save(streamDefinition);
 		if (deploy) {
-			deploymentController.deploy(name, null);
+			this.streamService.deployStream(name, new HashMap<>());
 		}
-		return new Assembler(new PageImpl<>(Collections.singletonList(stream))).toResource(stream);
+		return new Assembler(new PageImpl<>(Collections.singletonList(streamDefinition))).toResource(streamDefinition);
 	}
 
 	/**
@@ -277,17 +248,16 @@ public class StreamDefinitionController {
 	@RequestMapping(value = "/{name}", method = RequestMethod.DELETE)
 	@ResponseStatus(HttpStatus.OK)
 	public void delete(@PathVariable("name") String name) {
-		if (repository.findOne(name) == null) {
+		if (this.streamDefinitionRepository.findOne(name) == null) {
 			throw new NoSuchStreamDefinitionException(name);
 		}
-		deploymentController.undeploy(name);
-		this.repository.delete(name);
+		this.streamService.undeployStream(name);
+		this.streamDefinitionRepository.delete(name);
 	}
 
 	/**
-	 * Return a list of related stream definition resources based on the given stream
-	 * name. Related streams include the main stream and the tap stream(s) on the main
-	 * stream.
+	 * Return a list of related stream definition resources based on the given stream name.
+	 * Related streams include the main stream and the tap stream(s) on the main stream.
 	 *
 	 * @param name the name of an existing stream definition (required)
 	 * @param nested if should recursively search for related stream definitions
@@ -301,11 +271,11 @@ public class StreamDefinitionController {
 			@RequestParam(value = "nested", required = false, defaultValue = "false") boolean nested,
 			PagedResourcesAssembler<StreamDefinition> assembler) {
 		Set<StreamDefinition> relatedDefinitions = new LinkedHashSet<>();
-		StreamDefinition currentStreamDefinition = repository.findOne(name);
+		StreamDefinition currentStreamDefinition = streamDefinitionRepository.findOne(name);
 		if (currentStreamDefinition == null) {
 			throw new NoSuchStreamDefinitionException(name);
 		}
-		Iterable<StreamDefinition> definitions = repository.findAll();
+		Iterable<StreamDefinition> definitions = streamDefinitionRepository.findAll();
 		List<StreamDefinition> result = new ArrayList<>(findRelatedDefinitions(currentStreamDefinition, definitions,
 				relatedDefinitions, nested));
 		Page<StreamDefinition> page = new PageImpl<>(result, pageable,
@@ -342,7 +312,7 @@ public class StreamDefinitionController {
 	@RequestMapping(value = "/{name}", method = RequestMethod.GET)
 	@ResponseStatus(HttpStatus.OK)
 	public StreamDefinitionResource display(@PathVariable("name") String name) {
-		StreamDefinition definition = repository.findOne(name);
+		StreamDefinition definition = streamDefinitionRepository.findOne(name);
 		if (definition == null) {
 			throw new NoSuchStreamDefinitionException(name);
 		}
@@ -355,18 +325,10 @@ public class StreamDefinitionController {
 	@RequestMapping(value = "", method = RequestMethod.DELETE)
 	@ResponseStatus(HttpStatus.OK)
 	public void deleteAll() {
-		deploymentController.undeployAll();
-		this.repository.deleteAll();
-	}
-
-	private Map<String, DeploymentState> gatherDeploymentStates(String... ids) {
-		if (deployer instanceof MultiStateAppDeployer) {
-			return ((MultiStateAppDeployer) deployer).states(ids);
+		for (StreamDefinition streamDefinition : this.streamDefinitionRepository.findAll()) {
+			this.streamService.undeployStream(streamDefinition.getName());
 		}
-		else {
-			return Arrays.stream(ids)
-					.collect(Collectors.toMap(Function.identity(), id -> deployer.status(id).getState()));
-		}
+		this.streamDefinitionRepository.deleteAll();
 	}
 
 	/**
@@ -379,23 +341,8 @@ public class StreamDefinitionController {
 
 		public Assembler(Page<StreamDefinition> streamDefinitions) {
 			super(StreamDefinitionController.class, StreamDefinitionResource.class);
-
-			Map<StreamDefinition, List<String>> deploymentIdsPerStream = streamDefinitions.getContent().stream()
-					.collect(Collectors.toMap(Function.identity(),
-							sd -> sd.getAppDefinitions().stream().map(
-									sad -> deploymentIdRepository.findOne(DeploymentKey.forStreamAppDefinition(sad)))
-									.collect(Collectors.toList())));
-
-			// Map from app deployment id to state
-			Map<String, DeploymentState> statePerApp = gatherDeploymentStates(deploymentIdsPerStream.values().stream()
-					.flatMap(Collection::stream).filter(Objects::nonNull).toArray(String[]::new));
-
-			// Map from SCDF Stream to aggregate state
-			streamDeploymentStates = deploymentIdsPerStream.entrySet().stream()
-					.map(kv -> new AbstractMap.SimpleImmutableEntry<>(kv.getKey(), aggregateState(kv.getValue().stream()
-							.map(deploymentId -> statePerApp.getOrDefault(deploymentId, DeploymentState.unknown))
-							.collect(Collectors.toSet()))))
-					.collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+			streamDeploymentStates = StreamDefinitionController.this.streamService
+					.state(streamDefinitions.getContent());
 
 		}
 
@@ -414,10 +361,13 @@ public class StreamDefinitionController {
 		public StreamDefinitionResource instantiateResource(StreamDefinition stream) {
 			final StreamDefinitionResource resource = new StreamDefinitionResource(stream.getName(),
 					ArgumentSanitizer.sanitizeStream(stream.getDslText()));
-			final DeploymentStateResource deploymentStateResource = ControllerUtils
-					.mapState(streamDeploymentStates.get(stream));
-			resource.setStatus(deploymentStateResource.getKey());
-			resource.setStatusDescription(deploymentStateResource.getDescription());
+			DeploymentState deploymentState = streamDeploymentStates.get(stream);
+			if (deploymentState != null) {
+				final DeploymentStateResource deploymentStateResource = ControllerUtils
+						.mapState(deploymentState);
+				resource.setStatus(deploymentStateResource.getKey());
+				resource.setStatusDescription(deploymentStateResource.getDescription());
+			}
 			return resource;
 		}
 

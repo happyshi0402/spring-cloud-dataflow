@@ -52,12 +52,19 @@ import org.springframework.cloud.dataflow.server.registry.DataFlowAppRegistryPop
 import org.springframework.cloud.dataflow.server.repository.DeploymentIdRepository;
 import org.springframework.cloud.dataflow.server.repository.InMemoryDeploymentIdRepository;
 import org.springframework.cloud.dataflow.server.repository.InMemoryStreamDefinitionRepository;
+import org.springframework.cloud.dataflow.server.repository.InMemoryStreamDeploymentRepository;
 import org.springframework.cloud.dataflow.server.repository.InMemoryTaskDefinitionRepository;
 import org.springframework.cloud.dataflow.server.repository.StreamDefinitionRepository;
+import org.springframework.cloud.dataflow.server.repository.StreamDeploymentRepository;
 import org.springframework.cloud.dataflow.server.repository.TaskDefinitionRepository;
+import org.springframework.cloud.dataflow.server.service.StreamService;
 import org.springframework.cloud.dataflow.server.service.TaskService;
+import org.springframework.cloud.dataflow.server.service.impl.AppDeploymentRequestCreator;
+import org.springframework.cloud.dataflow.server.service.impl.DefaultStreamService;
 import org.springframework.cloud.dataflow.server.service.impl.DefaultTaskService;
 import org.springframework.cloud.dataflow.server.service.impl.TaskConfigurationProperties;
+import org.springframework.cloud.dataflow.server.stream.AppDeployerStreamDeployer;
+import org.springframework.cloud.dataflow.server.stream.SkipperStreamDeployer;
 import org.springframework.cloud.deployer.resource.maven.MavenProperties;
 import org.springframework.cloud.deployer.resource.maven.MavenResourceLoader;
 import org.springframework.cloud.deployer.resource.registry.InMemoryUriRegistry;
@@ -65,6 +72,7 @@ import org.springframework.cloud.deployer.resource.registry.UriRegistry;
 import org.springframework.cloud.deployer.resource.support.DelegatingResourceLoader;
 import org.springframework.cloud.deployer.spi.app.AppDeployer;
 import org.springframework.cloud.deployer.spi.task.TaskLauncher;
+import org.springframework.cloud.skipper.client.SkipperClient;
 import org.springframework.cloud.task.repository.TaskExplorer;
 import org.springframework.cloud.task.repository.TaskRepository;
 import org.springframework.cloud.task.repository.support.SimpleTaskRepository;
@@ -117,18 +125,55 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 
 	@Bean
 	public StreamDeploymentController streamDeploymentController(StreamDefinitionRepository repository,
-			DeploymentIdRepository deploymentIdRepository, AppRegistry registry,
-			ApplicationConfigurationMetadataResolver metadataResolver,
-			CommonApplicationProperties applicationProperties) {
-		return new StreamDeploymentController(repository, deploymentIdRepository, registry, appDeployer(),
-				metadataResolver, applicationProperties);
+			StreamService streamService) {
+		return new StreamDeploymentController(repository, streamService);
+	}
+
+	@Bean
+	public StreamService streamService(StreamDefinitionRepository streamDefinitionRepository,
+			StreamDeploymentRepository streamDeploymentRepository,
+			AppDeployerStreamDeployer appDeployerStreamDeployer,
+			SkipperStreamDeployer skipperStreamDeployer,
+			AppDeploymentRequestCreator appDeploymentRequestCreator) {
+		return new DefaultStreamService(streamDefinitionRepository,
+				streamDeploymentRepository,
+				appDeployerStreamDeployer,
+				skipperStreamDeployer,
+				appDeploymentRequestCreator);
+	}
+
+	@Bean
+	AppDeploymentRequestCreator streamDeploymentPropertiesUtils(AppRegistry appRegistry,
+																CommonApplicationProperties commonApplicationProperties,
+																ApplicationConfigurationMetadataResolver applicationConfigurationMetadataResolver) {
+		return new AppDeploymentRequestCreator(appRegistry,
+				commonApplicationProperties,
+				applicationConfigurationMetadataResolver);
+	}
+
+	@Bean
+	public AppDeployerStreamDeployer appDeployerStreamDeployer(AppDeployer appDeployer,
+			DeploymentIdRepository deploymentIdRepository,
+			StreamDefinitionRepository streamDefinitionRepository, StreamDeploymentRepository streamDeploymentRepository) {
+		return new AppDeployerStreamDeployer(appDeployer, deploymentIdRepository, streamDefinitionRepository,
+				streamDeploymentRepository);
+	}
+
+	@Bean
+	public SkipperStreamDeployer skipperStreamDeployer(SkipperClient skipperClient,
+			StreamDeploymentRepository streamDeploymentRepository) {
+		return new SkipperStreamDeployer(skipperClient, streamDeploymentRepository);
+	}
+
+	@Bean
+	public SkipperClient skipperClient() {
+		return mock(SkipperClient.class);
 	}
 
 	@Bean
 	public StreamDefinitionController streamDefinitionController(StreamDefinitionRepository repository,
-			DeploymentIdRepository deploymentIdRepository, StreamDeploymentController deploymentController) {
-		return new StreamDefinitionController(repository, deploymentIdRepository, deploymentController, appDeployer(),
-				appRegistry());
+			StreamService streamService) {
+		return new StreamDefinitionController(repository, appRegistry(), streamService);
 	}
 
 	@Bean
@@ -159,9 +204,10 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 	}
 
 	@Bean
-	public RuntimeAppsController runtimeAppsController(MetricStore metricStore) {
-		return new RuntimeAppsController(streamDefinitionRepository(), deploymentIdRepository(), appDeployer(),
-				metricStore, new ForkJoinPool(2));
+	public RuntimeAppsController runtimeAppsController(MetricStore metricStore, StreamService streamService) {
+		return new RuntimeAppsController(streamDefinitionRepository(), streamDeploymentRepository(),
+				deploymentIdRepository(), appDeployer(),
+				metricStore, new ForkJoinPool(2), skipperClient());
 	}
 
 	@Bean
@@ -272,6 +318,11 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 	@Bean
 	public TaskDefinitionRepository taskDefinitionRepository() {
 		return new InMemoryTaskDefinitionRepository();
+	}
+
+	@Bean
+	public StreamDeploymentRepository streamDeploymentRepository() {
+		return new InMemoryStreamDeploymentRepository();
 	}
 
 	@Bean

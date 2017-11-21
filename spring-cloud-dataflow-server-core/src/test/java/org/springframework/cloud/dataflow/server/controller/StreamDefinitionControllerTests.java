@@ -23,8 +23,8 @@ import sun.misc.Unsafe;
 
 import org.springframework.beans.DirectFieldAccessor;
 import org.springframework.cloud.dataflow.registry.AppRegistry;
-import org.springframework.cloud.dataflow.server.repository.DeploymentIdRepository;
 import org.springframework.cloud.dataflow.server.repository.StreamDefinitionRepository;
+import org.springframework.cloud.dataflow.server.service.StreamService;
 import org.springframework.cloud.deployer.resource.registry.UriRegistry;
 import org.springframework.core.io.ResourceLoader;
 
@@ -56,12 +56,10 @@ public class StreamDefinitionControllerTests {
 				.allocateInstance(StreamDefinitionController.class);
 
 		AppRegistry appRegistry = new AppRegistry(uriRegistry, mock(ResourceLoader.class));
-
 		DirectFieldAccessor accessor = new DirectFieldAccessor(controller);
 		accessor.setPropertyValue("appRegistry", appRegistry);
-		accessor.setPropertyValue("repository", mock(StreamDefinitionRepository.class));
-		accessor.setPropertyValue("deploymentIdRepository", mock(DeploymentIdRepository.class));
-
+		accessor.setPropertyValue("streamService", mock(StreamService.class));
+		accessor.setPropertyValue("streamDefinitionRepository", mock(StreamDefinitionRepository.class));
 		return controller;
 	}
 
