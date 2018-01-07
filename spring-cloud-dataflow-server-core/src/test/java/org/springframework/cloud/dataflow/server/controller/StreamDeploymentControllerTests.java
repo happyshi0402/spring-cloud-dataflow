@@ -16,10 +16,7 @@
 
 package org.springframework.cloud.dataflow.server.controller;
 
-import static org.mockito.Mockito.*;
-import static org.springframework.cloud.dataflow.rest.SkipperStream.SKIPPER_ENABLED_PROPERTY_KEY;
-
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -32,10 +29,15 @@ import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
+
 import org.springframework.cloud.dataflow.server.repository.StreamDefinitionRepository;
-import org.springframework.cloud.dataflow.server.service.impl.DefaultStreamService;
-import org.springframework.cloud.skipper.client.SkipperClient;
-import org.springframework.hateoas.Resources;
+import org.springframework.cloud.dataflow.server.service.StreamService;
+import org.springframework.cloud.skipper.domain.Deployer;
+
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.cloud.dataflow.rest.SkipperStream.SKIPPER_ENABLED_PROPERTY_KEY;
 
 /**
  * Unit tests for StreamDeploymentController.
@@ -55,14 +57,14 @@ public class StreamDeploymentControllerTests {
 	private StreamDefinitionRepository streamDefinitionRepository;
 
 	@Mock
-	private DefaultStreamService defaultStreamService;
+	private StreamService defaultStreamService;
 
 	@Mock
-	private SkipperClient skipperClient;
+	private Deployer deployer;
 
 	@Before
 	public void setup() {
-		this.controller = new StreamDeploymentController(streamDefinitionRepository, defaultStreamService, skipperClient);
+		this.controller = new StreamDeploymentController(streamDefinitionRepository, defaultStreamService);
 	}
 
 	@Test
@@ -91,9 +93,9 @@ public class StreamDeploymentControllerTests {
 
 	@Test
 	public void tesPlatformsListViaSkipperClient() {
-		when(skipperClient.listDeployers()).thenReturn(new Resources<>(new ArrayList<>(), new ArrayList<>()));
+		when(defaultStreamService.platformList()).thenReturn(Arrays.asList(deployer));
 		this.controller.platformList();
-		verify(skipperClient, times(1)).listDeployers();
+		verify(defaultStreamService, times(1)).platformList();
 	}
 
 }

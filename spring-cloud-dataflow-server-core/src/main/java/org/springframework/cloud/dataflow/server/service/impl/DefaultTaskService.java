@@ -19,6 +19,7 @@ package org.springframework.cloud.dataflow.server.service.impl;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -28,10 +29,12 @@ import org.springframework.cloud.dataflow.configuration.metadata.ApplicationConf
 import org.springframework.cloud.dataflow.core.ApplicationType;
 import org.springframework.cloud.dataflow.core.TaskDefinition;
 import org.springframework.cloud.dataflow.core.TaskDefinition.TaskDefinitionBuilder;
+import org.springframework.cloud.dataflow.core.dsl.TaskApp;
 import org.springframework.cloud.dataflow.core.dsl.TaskNode;
 import org.springframework.cloud.dataflow.core.dsl.TaskParser;
-import org.springframework.cloud.dataflow.registry.AppRegistration;
+import org.springframework.cloud.dataflow.registry.domain.AppRegistration;
 import org.springframework.cloud.dataflow.registry.AppRegistry;
+import org.springframework.cloud.dataflow.registry.AppRegistryCommon;
 import org.springframework.cloud.dataflow.rest.util.DeploymentPropertiesUtils;
 import org.springframework.cloud.dataflow.server.controller.WhitelistProperties;
 import org.springframework.cloud.dataflow.server.repository.DeploymentIdRepository;
@@ -48,6 +51,7 @@ import org.springframework.cloud.task.repository.TaskExplorer;
 import org.springframework.cloud.task.repository.TaskRepository;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
@@ -88,7 +92,7 @@ public class DefaultTaskService implements TaskService {
 	/**
 	 * The {@link AppRegistry} this service will use to look up task app URIs.
 	 */
-	private final AppRegistry registry;
+	private final AppRegistryCommon registry;
 
 	/**
 	 * The {@link ResourceLoader} that will resolve URIs to {@link Resource}s.
@@ -124,7 +128,7 @@ public class DefaultTaskService implements TaskService {
 	 */
 	public DefaultTaskService(DataSourceProperties dataSourceProperties,
 			TaskDefinitionRepository taskDefinitionRepository, TaskExplorer taskExplorer,
-			TaskRepository taskExecutionRepository, AppRegistry registry, ResourceLoader resourceLoader,
+			TaskRepository taskExecutionRepository, AppRegistryCommon registry, ResourceLoader resourceLoader,
 			TaskLauncher taskLauncher, ApplicationConfigurationMetadataResolver metaDataResolver,
 			TaskConfigurationProperties taskConfigurationProperties, DeploymentIdRepository deploymentIdRepository,
 			String dataflowServerUri) {
@@ -162,18 +166,19 @@ public class DefaultTaskService implements TaskService {
 		}
 		TaskParser taskParser = new TaskParser(taskDefinition.getName(), taskDefinition.getDslText(), true, true);
 		TaskNode taskNode = taskParser.parse();
-		// if composed task definition replace definition with with one composed task
+		// if composed task definition replace definition with one composed task
 		// runner and executable graph.
 		if (taskNode.isComposed()) {
 			taskDefinition = new TaskDefinition(taskDefinition.getName(),
 					createComposedTaskDefinition(taskNode.toExecutableDSL()));
+			taskDeploymentProperties = establishComposedTaskProperties(taskDeploymentProperties, taskNode);
 		}
 
 		AppRegistration appRegistration = this.registry.find(taskDefinition.getRegisteredAppName(),
 				ApplicationType.task);
 		Assert.notNull(appRegistration, "Unknown task app: " + taskDefinition.getRegisteredAppName());
-		Resource appResource = appRegistration.getResource();
-		Resource metadataResource = appRegistration.getMetadataResource();
+		Resource appResource = this.registry.getAppResource(appRegistration);
+		Resource metadataResource = this.registry.getAppMetadataResource(appRegistration);
 
 		TaskExecution taskExecution = taskExecutionRepository.createTaskExecution(taskName);
 		taskDefinition = this.updateTaskProperties(taskDefinition);
@@ -196,6 +201,36 @@ public class DefaultTaskService implements TaskService {
 		}
 		taskExecutionRepository.updateExternalExecutionId(taskExecution.getExecutionId(), id);
 		return taskExecution.getExecutionId();
+	}
+
+	private Map<String, String> establishComposedTaskProperties(
+			Map<String, String> taskDeploymentProperties,
+			TaskNode taskNode) {
+		String result = "";
+		taskDeploymentProperties = new HashMap<>(taskDeploymentProperties);
+		for (TaskApp subTask : taskNode.getTaskApps()) {
+			String subTaskName = String.format("app.%s-%s.", taskNode.getName(),
+					(subTask.getLabel() == null) ? subTask.getName() : subTask.getLabel());
+			String scdfTaskName = String.format("app.%s.%s.", taskNode.getName(),
+					(subTask.getLabel() == null) ? subTask.getName() : subTask.getLabel());
+			Set<String> propertyKeys = taskDeploymentProperties.keySet().
+					stream().filter(taskProperty -> taskProperty.startsWith(scdfTaskName))
+					.collect(Collectors.toSet());
+			for (String taskProperty : propertyKeys) {
+				if (result.length() != 0) {
+					result += ", ";
+				}
+				result += String.format("%sapp.%s.%s=%s", subTaskName,
+						subTask.getName(),
+						taskProperty.substring(subTaskName.length()),
+						taskDeploymentProperties.get(taskProperty));
+				taskDeploymentProperties.remove(taskProperty);
+			}
+		}
+		if (result.length() != 0) {
+			taskDeploymentProperties.put("app.composed-task-runner.composed-task-properties", result);
+		}
+		return taskDeploymentProperties;
 	}
 
 	private void updateDataFlowUriIfNeeded(Map<String, String> appDeploymentProperties, List<String> commandLineArgs) {
@@ -272,6 +307,7 @@ public class DefaultTaskService implements TaskService {
 	}
 
 	@Override
+	@Transactional
 	public void saveTaskDefinition(String name, String dsl) {
 		TaskParser taskParser = new TaskParser(name, dsl, true, true);
 		TaskNode taskNode = taskParser.parse();

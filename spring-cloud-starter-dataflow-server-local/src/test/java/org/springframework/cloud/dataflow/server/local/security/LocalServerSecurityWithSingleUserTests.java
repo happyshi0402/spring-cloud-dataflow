@@ -29,7 +29,6 @@ import org.junit.runners.Parameterized.Parameter;
 import org.junit.runners.Parameterized.Parameters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.springframework.cloud.dataflow.server.local.LocalDataflowResource;
 import org.springframework.cloud.dataflow.server.local.TestUtils;
 import org.springframework.data.authentication.UserCredentials;
@@ -61,7 +60,7 @@ public class LocalServerSecurityWithSingleUserTests {
 	private final static Logger logger = LoggerFactory.getLogger(LocalServerSecurityWithSingleUserTests.class);
 
 	private final static LocalDataflowResource localDataflowResource = new LocalDataflowResource(
-			"classpath:org/springframework/cloud/dataflow/server/local/security" + "/singleUser.yml");
+			"classpath:org/springframework/cloud/dataflow/server/local/security/singleUser.yml");
 
 	@ClassRule
 	public static TestRule springDataflowAndLdapServer = RuleChain.outerRule(localDataflowResource);
@@ -163,6 +162,21 @@ public class LocalServerSecurityWithSingleUserTests {
 						TestUtils.toImmutableMap("detailLevel", "2") },
 				{ HttpMethod.GET, HttpStatus.UNAUTHORIZED, "/tools/convertTaskGraphToText", null,
 						TestUtils.toImmutableMap("detailLevel", "2") },
+
+				{ HttpMethod.PUT, HttpStatus.FORBIDDEN, "/tools/parseTaskTextToGraph", singleUser, null },
+				{ HttpMethod.PUT, HttpStatus.FORBIDDEN, "/tools/parseTaskTextToGraph", singleUser,
+						TestUtils.toImmutableMap("name", "foo", "dsl", "t1 || t2") },
+
+				{ HttpMethod.PUT, HttpStatus.FORBIDDEN, "/tools/convertTaskGraphToText", singleUser, null },
+				{ HttpMethod.PUT, HttpStatus.FORBIDDEN, "/tools/convertTaskGraphToText", singleUser,
+						TestUtils.toImmutableMap("detailLevel", "2") },
+
+				{ HttpMethod.POST, HttpStatus.BAD_REQUEST, "/tools/parseTaskTextToGraph", singleUser,
+						TestUtils.toImmutableMap("name", "foo", "dsl", "t1 && t2")},
+				{ HttpMethod.POST, HttpStatus.UNAUTHORIZED, "/tools/parseTaskTextToGraph", null, null },
+
+				{ HttpMethod.POST, HttpStatus.BAD_REQUEST, "/tools/convertTaskGraphToText", singleUser, null},
+				{ HttpMethod.POST, HttpStatus.UNAUTHORIZED, "/tools/convertTaskGraphToText", null, null },
 
 				/* FeaturesController */
 
@@ -385,13 +399,14 @@ public class LocalServerSecurityWithSingleUserTests {
 
 				/* LoginController */
 
-				{ HttpMethod.POST, HttpStatus.INTERNAL_SERVER_ERROR, "/authenticate", singleUser, null },
-				{ HttpMethod.POST, HttpStatus.INTERNAL_SERVER_ERROR, "/authenticate", null, null },
+				{ HttpMethod.POST, HttpStatus.BAD_REQUEST, "/authenticate", singleUser, null },
+				{ HttpMethod.POST, HttpStatus.BAD_REQUEST, "/authenticate", null, null },
 
 				/* SecurityController */
 
 				{ HttpMethod.GET, HttpStatus.OK, "/security/info", singleUser, null },
 				{ HttpMethod.GET, HttpStatus.OK, "/security/info", null, null } });
+
 	}
 
 	@Test

@@ -15,6 +15,12 @@
  */
 package org.springframework.cloud.dataflow.server.controller;
 
+import org.apache.http.conn.ssl.NoopHostnameVerifier;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.common.security.support.SecurityStateBean;
 import org.springframework.cloud.dataflow.rest.resource.about.AboutResource;
@@ -26,31 +32,42 @@ import org.springframework.cloud.dataflow.rest.resource.about.SecurityInfo;
 import org.springframework.cloud.dataflow.rest.resource.about.VersionInfo;
 import org.springframework.cloud.dataflow.server.config.VersionInfoProperties;
 import org.springframework.cloud.dataflow.server.config.features.FeaturesProperties;
-import org.springframework.cloud.deployer.spi.app.AppDeployer;
+import org.springframework.cloud.dataflow.server.stream.StreamDeployer;
 import org.springframework.cloud.deployer.spi.core.RuntimeEnvironmentInfo;
 import org.springframework.cloud.deployer.spi.task.TaskLauncher;
 import org.springframework.hateoas.ExposesResourceFor;
 import org.springframework.hateoas.mvc.ControllerLinkBuilder;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestTemplate;
 
 /**
  * REST controller that provides meta information regarding the dataflow server and its
  * deployers.
  *
  * @author Gunnar Hillert
+ * @author Glenn Renfro
  */
 @RestController
 @RequestMapping("/about")
 @ExposesResourceFor(AboutResource.class)
 public class AboutController {
+
+	private static final Logger logger = LoggerFactory.getLogger(AboutController.class);
+
+	private final StreamDeployer streamDeployer;
 
 	private final FeaturesProperties featuresProperties;
 
@@ -67,13 +84,11 @@ public class AboutController {
 	@Value("${info.app.version:#{null}}")
 	private String implementationVersion;
 
-	private AppDeployer appDeployer;
-
 	private TaskLauncher taskLauncher;
 
-	public AboutController(AppDeployer appDeployer, TaskLauncher taskLauncher, FeaturesProperties featuresProperties,
+	public AboutController(StreamDeployer streamDeployer, TaskLauncher taskLauncher, FeaturesProperties featuresProperties,
 			VersionInfoProperties versionInfoProperties, SecurityStateBean securityStateBean) {
-		this.appDeployer = appDeployer;
+		this.streamDeployer = streamDeployer;
 		this.taskLauncher = taskLauncher;
 		this.featuresProperties = featuresProperties;
 		this.versionInfoProperties = versionInfoProperties;
@@ -94,14 +109,10 @@ public class AboutController {
 		featureInfo.setAnalyticsEnabled(featuresProperties.isAnalyticsEnabled());
 		featureInfo.setStreamsEnabled(featuresProperties.isStreamsEnabled());
 		featureInfo.setTasksEnabled(featuresProperties.isTasksEnabled());
+		featureInfo.setSkipperEnabled(featuresProperties.isSkipperEnabled());
 
-		final VersionInfo versionInfo = new VersionInfo();
 
-		versionInfo.setImplementation(new Dependency(this.implementationName, this.implementationVersion));
-		versionInfo
-				.setCore(new Dependency("Spring Cloud Data Flow Core", versionInfoProperties.getDataflowCoreVersion()));
-		versionInfo.setDashboard(
-				new Dependency("Spring Cloud Dataflow UI", versionInfoProperties.getDataflowDashboardVersion()));
+		final VersionInfo versionInfo = getVersionInfo();
 
 		aboutResource.setFeatureInfo(featureInfo);
 		aboutResource.setVersionInfo(versionInfo);
@@ -137,8 +148,8 @@ public class AboutController {
 
 		final RuntimeEnvironment runtimeEnvironment = new RuntimeEnvironment();
 
-		if (this.appDeployer != null) {
-			final RuntimeEnvironmentInfo deployerEnvironmentInfo = this.appDeployer.environmentInfo();
+		if (this.streamDeployer != null) {
+			final RuntimeEnvironmentInfo deployerEnvironmentInfo = this.streamDeployer.environmentInfo();
 			final RuntimeEnvironmentDetails deployerInfo = new RuntimeEnvironmentDetails();
 
 			deployerInfo.setDeployerImplementationVersion(deployerEnvironmentInfo.getImplementationVersion());
@@ -181,5 +192,95 @@ public class AboutController {
 		aboutResource.add(ControllerLinkBuilder.linkTo(AboutController.class).withSelfRel());
 
 		return aboutResource;
+	}
+
+	private VersionInfo getVersionInfo() {
+		final VersionInfo versionInfo = new VersionInfo();
+
+		updateDependency(versionInfo.getDashboard(),
+				versionInfoProperties.getDependencies().getSpringCloudDataflowDashboard());
+		updateDependency(versionInfo.getImplementation(),
+				versionInfoProperties.getDependencies().getSpringCloudDataflowImplementation());
+		updateDependency(versionInfo.getCore(),
+				versionInfoProperties.getDependencies().getSpringCloudDataflowCore());
+		updateDependency(versionInfo.getShell(),
+				versionInfoProperties.getDependencies().getSpringCloudDataflowShell());
+
+		if(versionInfoProperties.getDependencyFetch().isEnabled()) {
+			versionInfo.getShell().setChecksumSha1(getChecksum(
+					versionInfoProperties.getDependencies().getSpringCloudDataflowShell().getChecksumSha1(),
+					versionInfoProperties.getDependencies().getSpringCloudDataflowShell().getChecksumSha1Url(),
+					versionInfoProperties.getDependencies().getSpringCloudDataflowShell().getVersion()));
+			versionInfo.getShell().setChecksumSha256(getChecksum(
+					versionInfoProperties.getDependencies().getSpringCloudDataflowShell().getChecksumSha256(),
+					versionInfoProperties.getDependencies().getSpringCloudDataflowShell().getChecksumSha256Url(),
+					versionInfoProperties.getDependencies().getSpringCloudDataflowShell().getVersion()));
+		}
+		return versionInfo;
+	}
+
+	private String getChecksum(String defaultValue, String url,
+			String version) {
+		String result = defaultValue;
+		if(result == null && StringUtils.hasText(url)) {
+			CloseableHttpClient httpClient = HttpClients.custom()
+					.setSSLHostnameVerifier(new NoopHostnameVerifier())
+					.build();
+			HttpComponentsClientHttpRequestFactory requestFactory
+					= new HttpComponentsClientHttpRequestFactory();
+			requestFactory.setHttpClient(httpClient);
+			url = constructUrl(url, version);
+			try {
+				ResponseEntity<String> response
+						= new RestTemplate(requestFactory).exchange(
+						url, HttpMethod.GET, null, String.class);
+				if (response.getStatusCode().equals(HttpStatus.OK)) {
+					result = response.getBody();
+				}
+			}
+			catch (HttpClientErrorException httpException) {
+				// no action necessary set result to undefined
+				logger.debug("Didn't retrieve checksum because", httpException);
+			}
+		}
+		return result;
+	}
+
+	private void updateDependency(Dependency dependency, VersionInfoProperties.DependencyAboutInfo dependencyAboutInfo) {
+		dependency.setName(dependencyAboutInfo.getName());
+		if(dependencyAboutInfo.getUrl() != null) {
+			dependency.setUrl(constructUrl(dependencyAboutInfo.getUrl(),
+					dependencyAboutInfo.getVersion()));
+		}
+		dependency.setVersion(dependencyAboutInfo.getVersion());
+	}
+
+	private String constructUrl(String url, String version) {
+		final String VERSION_TAG = "{version}";
+		final String REPOSITORY_TAG = "{repository}";
+		if(url.contains(VERSION_TAG)) {
+			url = StringUtils.replace(url, VERSION_TAG, version);
+			url = StringUtils.replace(url, REPOSITORY_TAG, repoSelector(version));
+		}
+		return url;
+	}
+
+	private String repoSelector(String version) {
+		final String BUILD_SNAPSHOT_CRITERIA = "BUILD-SNAPSHOT";
+		final String REPO_SNAPSHOT_ROOT = "https://repo.spring.io/libs-snapshot";
+		final String REPO_MILESTONE_ROOT = "https://repo.spring.io/libs-milestone";
+		final String REPO_RELEASE_ROOT = "https://repo.spring.io/libs-release";
+		final String MAVEN_ROOT = "https://repo1.maven.org/maven2";
+		String result = MAVEN_ROOT;
+		if(version.endsWith(BUILD_SNAPSHOT_CRITERIA)){
+			result = REPO_SNAPSHOT_ROOT;
+		}
+		else if(version.contains(".M")) {
+			result = REPO_MILESTONE_ROOT;
+		}
+		else if(version.contains(".RC")) {
+			result = REPO_RELEASE_ROOT;
+		}
+		return result;
 	}
 }

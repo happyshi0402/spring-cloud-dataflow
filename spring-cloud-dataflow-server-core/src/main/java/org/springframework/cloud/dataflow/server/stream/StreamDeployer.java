@@ -17,9 +17,13 @@ package org.springframework.cloud.dataflow.server.stream;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 
 import org.springframework.cloud.dataflow.core.StreamDefinition;
+import org.springframework.cloud.deployer.spi.app.AppStatus;
 import org.springframework.cloud.deployer.spi.app.DeploymentState;
+import org.springframework.cloud.deployer.spi.core.RuntimeEnvironmentInfo;
+import org.springframework.data.domain.Pageable;
 
 /**
  * SPI for handling deployment related operations on the apps in a stream.
@@ -28,11 +32,6 @@ import org.springframework.cloud.deployer.spi.app.DeploymentState;
  * @author Ilayaperumal Gopinathan
  */
 public interface StreamDeployer {
-
-	// TODO return 'stream handle' stream name for AppDeployer impl, release name for Skipper
-	// impl.
-	// TODO store releaseName in SCDF for stream name?
-	void deployStream(StreamDeploymentRequest streamDeploymentRequest);
 
 	String calculateStreamState(String streamName);
 
@@ -45,4 +44,9 @@ public interface StreamDeployer {
 	 */
 	void undeployStream(String name);
 
+	List<AppStatus> getAppStatuses(Pageable pageable) throws ExecutionException, InterruptedException;
+
+	AppStatus getAppStatus(String id);
+
+	RuntimeEnvironmentInfo environmentInfo();
 }
